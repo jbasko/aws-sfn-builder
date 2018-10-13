@@ -48,42 +48,37 @@ Here's a result of ``Machine.parse(raw).to_json()``:
             },
             "b": {
                 "Type": "Pass",
-                "Next": "a10c52c9-1ea6-430f-8140-e6c00c4d2163",
+                "Next": "f1ba541c-632b-4a7e-94c4-7aaf60dde8cd",
                 "Result": "b-result"
             },
-            "a10c52c9-1ea6-430f-8140-e6c00c4d2163": {
-                "StartAt": "4c32ee0a-91b7-4db7-8a24-d5321c67237c",
-                "States": {
-                    "4c32ee0a-91b7-4db7-8a24-d5321c67237c": {
-                        "Type": "Parallel",
-                        "End": true,
-                        "Comment": "4c32ee0a-91b7-4db7-8a24-d5321c67237c",
-                        "Branches": [
-                            {
-                                "StartAt": "c1",
-                                "States": {
-                                    "c1": {
-                                        "Type": "Task",
-                                        "Next": "c2"
-                                    },
-                                    "c2": {
-                                        "Type": "Task",
-                                        "End": true
-                                    }
-                                }
+            "f1ba541c-632b-4a7e-94c4-7aaf60dde8cd": {
+                "Type": "Parallel",
+                "End": true,
+                "Comment": "f1ba541c-632b-4a7e-94c4-7aaf60dde8cd",
+                "Branches": [
+                    {
+                        "StartAt": "c1",
+                        "States": {
+                            "c1": {
+                                "Type": "Task",
+                                "Next": "c2"
                             },
-                            {
-                                "StartAt": "d",
-                                "States": {
-                                    "d": {
-                                        "Type": "Task",
-                                        "End": true
-                                    }
-                                }
+                            "c2": {
+                                "Type": "Task",
+                                "End": true
                             }
-                        ]
+                        }
+                    },
+                    {
+                        "StartAt": "d",
+                        "States": {
+                            "d": {
+                                "Type": "Task",
+                                "End": true
+                            }
+                        }
                     }
-                }
+                ]
             }
         }
     }
