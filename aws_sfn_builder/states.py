@@ -125,10 +125,11 @@ class Sequence(State):
     states: Dict[str, State] = dataclasses.field(default_factory=dict)
 
     @classmethod
-    def parse(cls, raw: List) -> "Sequence":
-        assert isinstance(raw, list)
+    def parse(cls, raw: List) -> "State":
+        if not isinstance(raw, list):
+            raise TypeError(raw)
         if raw and all(isinstance(item, list) for item in raw):
-            states = [Parallel.parse(raw)]
+            return Parallel.parse(raw)
         else:
             states = []
             for raw_state in raw:
@@ -161,6 +162,14 @@ class Sequence(State):
 
 @dataclasses.dataclass
 class Machine(Sequence):
+
+    @classmethod
+    def parse(cls, raw: List) -> "Machine":
+        sequence = super().parse(raw)
+        if isinstance(sequence, Parallel):
+            return Machine(start_at=sequence, states={sequence.name: sequence})
+        assert isinstance(sequence, Machine)
+        return sequence
 
     def to_json(self, json_options=None, state_visitor: Callable[[State, Dict], None]=None):
         """

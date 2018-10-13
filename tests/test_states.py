@@ -15,6 +15,9 @@ def test_simple_parallel():
     assert isinstance(s.start_at, Parallel)
     assert s.dry_run() == source
 
+    c = s.compile()
+    assert c["States"][c["StartAt"]]["Type"] == "Parallel"
+
 
 def test_parallel_inside_sequence():
     source = [
@@ -29,6 +32,9 @@ def test_parallel_inside_sequence():
     assert len(s.states) == 3
     assert s.start_at.name == "a"
     assert s.dry_run() == source
+
+    c = s.compile()
+    assert c["States"][c["States"]["a"]["Next"]]["Type"] == "Parallel"
 
 
 def test_parallel_inside_parallel():
@@ -50,3 +56,6 @@ def test_parallel_inside_parallel():
     ]
     s = Machine.parse(source)
     assert s.dry_run() == source
+
+    c = s.compile()
+    assert c["States"][c["StartAt"]]["Type"] == "Parallel"

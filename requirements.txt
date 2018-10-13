@@ -1,5 +1,6 @@
 dataclasses
 
+autoboto
 flake8
 isort
 pygments
@@ -7,3 +8,4 @@ pytest
 pytest-random-order
 twine
 wheel
+wr-profiles
