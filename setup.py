@@ -23,7 +23,7 @@ setup(
     url="https://github.com/jbasko/aws-sfn-builder",
     description="AWS Step Functions: state machine boilerplate generator",
     long_description=read("README.rst"),
-    packages=find_packages("."),
+    packages=find_packages(exclude=["integration_tests", "tests"]),
     python_requires=">=3.6.0",
     install_requires=[
         "dataclasses",

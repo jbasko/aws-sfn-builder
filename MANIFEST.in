@@ -7,5 +7,6 @@ prune integration_tests
 prune dist
 
 global-exclude *.py[co]
-global-exclude ".pytest_cache"
-global-exclude ".DS_Store"
+global-exclude .pytest_cache
+global-exclude __pycache__
+global-exclude .DS_Store
