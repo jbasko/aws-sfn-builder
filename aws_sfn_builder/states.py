@@ -345,10 +345,11 @@ class Parallel(Task):
     branches: List["Sequence"] = dataclasses.field(default_factory=list)
 
     @classmethod
-    def parse_list(cls, raw: List) -> "Parallel":
+    def parse_list(cls, raw: List, **fields) -> "Parallel":
         assert isinstance(raw, List)
         return cls(
             branches=[Sequence.parse_list(raw_branch) for raw_branch in raw],
+            **fields,
         )
 
     @classmethod
@@ -390,10 +391,11 @@ class Sequence(State):
         return self.states[self.start_at]
 
     @classmethod
-    def parse_list(cls, raw: List) -> "State":
+    def parse_list(cls, raw: List, **fields) -> "State":
         if not isinstance(raw, list):
             raise TypeError(raw)
         if raw and all(isinstance(item, list) for item in raw):
+            assert not fields
             return Parallel.parse_list(raw)
         else:
             states = []
@@ -407,6 +409,7 @@ class Sequence(State):
         return cls(
             start_at=states[0].name if states else None,
             states={s.name: s for s in states},
+            **fields,
         )
 
     @classmethod
@@ -491,16 +494,16 @@ class Machine(Sequence):
     version: str = None
 
     @classmethod
-    def parse(cls, raw: Union[List, Dict]) -> "Machine":
+    def parse(cls, raw: Union[List, Dict], **fields) -> "Machine":
         if isinstance(raw, list):
-            sequence = super().parse_list(raw)
+            sequence = super().parse_list(raw, **fields)
             if isinstance(sequence, Parallel):
-                return cls(start_at=sequence.name, states={sequence.name: sequence})
+                return cls(start_at=sequence.name, states={sequence.name: sequence}, **fields)
             assert isinstance(sequence, Machine)
             return sequence
         elif isinstance(raw, dict):
             # Proper state machine definition
-            return Sequence.parse(raw, type=States.Machine)
+            return Sequence.parse(raw, type=States.Machine, **fields)
         else:
             raise TypeError(raw)
 

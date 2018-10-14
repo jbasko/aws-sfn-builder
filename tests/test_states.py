@@ -211,3 +211,13 @@ def test_machine_state(example):
     assert isinstance(machine.start_at_state, Task)
 
     assert machine.compile() == source
+
+
+def test_machine_accepts_fields_as_kwargs(example):
+    m1 = Machine.parse([], comment="This is a comment", version="1.0", timeout_seconds=60)
+    assert m1.comment == "This is a comment"
+    assert m1.version == "1.0"
+    assert m1.timeout_seconds == 60
+
+    m2 = Machine.parse(example("hello_world"), timeout_seconds=35)
+    assert m2.timeout_seconds == 35
