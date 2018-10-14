@@ -321,7 +321,7 @@ class Sequence(State):
         for i, state in enumerate(states[:-1]):
             state.next = states[i + 1].name
         return cls(
-            start_at=states[0].name,
+            start_at=states[0].name if states else None,
             states={s.name: s for s in states},
         )
 
@@ -336,6 +336,60 @@ class Sequence(State):
         while state is not None:
             state = self.states.get(state.dry_run(trace))
         return self.next
+
+    def insert(self, raw, before: str=None, after: str=None):
+        new_state = State.parse(raw)
+        if before:
+            assert not after
+            assert new_state.name != before
+            inserted = False
+            if self.start_at == before:
+                self.start_at = new_state.name
+                inserted = True
+            for state in self.states.values():
+                if state.next == before:
+                    state.next = new_state.name
+                    inserted = True
+            if not inserted:
+                raise ValueError(before)
+            new_state.next = before
+            self.states[new_state.name] = new_state
+
+        elif after:
+            assert not before
+            assert new_state.name != after
+            new_state.next = self.states[after].next
+            self.states[after].next = new_state.name
+            self.states[new_state.name] = new_state
+        else:
+            raise NotImplementedError()
+
+    def remove(self, name: str):
+        removed_state = self.states[name]
+        for state in self.states.values():
+            if state.next == name:
+                state.next = removed_state.next
+        if self.start_at == name:
+            self.start_at = removed_state.next
+        del self.states[name]
+
+    def append(self, raw):
+        new_state = State.parse(raw)
+        if not self.states:
+            self.states[new_state.name] = new_state
+            self.start_at = new_state.name
+            return
+
+        terminal_states = [s for s in self.states.values() if not s.next]
+
+        if not terminal_states:
+            raise ValueError("Sequence has no terminal state, cannot append reliably")
+
+        self.states[new_state.name] = new_state
+
+        # There can be more than one terminal state.
+        for s in terminal_states:
+            s.next = new_state.name
 
 
 @dataclasses.dataclass
@@ -372,6 +426,10 @@ class Machine(Sequence):
     def dry_run(self, trace: List=None):
         if trace is None:
             trace = []
+
+        if self.start_at is None:
+            return trace
+
         state = self.states[self.start_at]
         while state is not None:
             state = self.states.get(state.dry_run(trace))

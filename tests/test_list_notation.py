@@ -1,6 +1,13 @@
 from aws_sfn_builder import Machine, Parallel
 
 
+def test_empty_machine():
+    m = Machine.parse([])
+    assert m.start_at is None
+    assert not m.states
+    assert m.dry_run() == []
+
+
 def test_simple_sequence():
     s = Machine.parse(["a", "b"])
     assert len(s.states) == 2
