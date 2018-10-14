@@ -1,69 +1,184 @@
-from aws_sfn_builder import Machine, Parallel
+"""
+Examples are from:
+- https://states-language.net/spec.html
+- https://docs.aws.amazon.com/step-functions/latest/dg/concepts-amazon-states-language.html
+"""
+import json
+
+import pytest
+
+from aws_sfn_builder import Pass, State, Succeed, Task, Wait
+from aws_sfn_builder.states import Fail, Parallel, Sequence
 
 
-def test_simple_sequence():
-    s = Machine.parse(["a", "b"])
-    assert len(s.states) == 2
-    assert s.start_at == "a"
-    assert s.dry_run() == ["a", "b"]
+def test_parse_of_state_is_the_state_itself():
+    x1 = State()
+    assert State.parse(x1) is x1
+
+    x2 = State.parse(x1, comment="x2")
+    assert x2 is not x1
+    assert x2.comment == "x2"
+    assert x1.comment is None
+
+    assert State.parse(x2) is x2
 
 
-def test_simple_parallel():
-    source = [["a"], ["b"]]
-    s = Machine.parse(source)
-    assert len(s.states) == 1
-    assert isinstance(s.states[s.start_at], Parallel)
-    assert s.dry_run() == source
+def test_pass_state():
+    source = {
+        "Type": "Pass",
+        "Result": {
+            "x-datum": 0.381018,
+            "y-datum": 622.2269926397355
+        },
+        "ResultPath": "$.coords",
+        "Next": "End",
+    }
 
-    c = s.compile()
-    assert c["States"][c["StartAt"]]["Type"] == "Parallel"
+    state = State.parse(source)
+
+    assert isinstance(state, Pass)
+    assert state.result_path == "$.coords"
+
+    assert state.compile() == source
 
 
-def test_parallel_inside_sequence():
-    source = [
-        "a",
-        [
-            ["b11", "b12"],
-            ["b21", "b22"],
+def test_task_state():
+    source = {
+        "Comment": "Task State example",
+        "Type": "Task",
+        "Resource": "arn:aws:swf:us-east-1:123456789012:task:HelloWorld",
+        "Next": "NextState",
+        "TimeoutSeconds": 300,
+        "HeartbeatSeconds": 60
+    }
+
+    state = State.parse(source)
+
+    assert isinstance(state, Task)
+
+    assert state.compile() == source
+
+
+def test_choice_state(example):
+    source = example("choice_state_x")["States"]["ChoiceStateX"]
+
+    state = State.parse(source)
+
+    assert state.compile() == source
+
+
+@pytest.mark.parametrize("extras", [
+    {"Seconds": 10},
+    {"SecondsPath": "$.seconds"},
+    {"Timestamp": "2016-03-14T01:59:00Z"},
+    {"TimestampPath": "$.expirydate"},
+])
+def test_wait_state(extras):
+    source = {
+        "Type": "Wait",
+        "Next": "NextState",
+        **extras,
+    }
+
+    state = State.parse(source)
+    assert isinstance(state, Wait)
+    assert state.type == "Wait"
+    assert state.next == "NextState"
+
+    assert state.compile() == source
+
+
+def test_suceed_state():
+    source = {
+        "Type": "Succeed",
+    }
+
+    state = State.parse(source)
+    assert isinstance(state, Succeed)
+    assert state.type == "Succeed"
+
+    assert state.compile() == source
+
+
+def test_fail_state():
+    source = {
+        "Type": "Fail",
+        "Error": "ErrorA",
+        "Cause": "Kaiju attack",
+    }
+
+    state = State.parse(source)
+    assert isinstance(state, Fail)
+
+    assert state.compile() == source
+
+
+def test_task_state_with_retry():
+    source = {
+        "Type": "Task",
+        "Resource": "arn:aws:swf:us-east-1:123456789012:task:X",
+        "Next": "Y",
+        "Retry": [
+            {
+                "ErrorEquals": ["ErrorA", "ErrorB"],
+                "IntervalSeconds": 1,
+                "BackoffRate": 2,
+                "MaxAttempts": 2
+            },
+            {
+                "ErrorEquals": ["ErrorC"],
+                "IntervalSeconds": 5
+            }
         ],
-        "c",
-    ]
-    s = Machine.parse(source)
-    assert len(s.states) == 3
-    assert s.start_at == "a"
-    assert s.dry_run() == source
-
-    c = s.compile()
-    assert c["States"][c["States"]["a"]["Next"]]["Type"] == "Parallel"
-
-
-def test_parallel_inside_parallel():
-    source = [
-        [
-            "a",
-        ],
-        [
-            [
-                [
-                    "b11",
-                ],
-                [
-                    "b21",
-                ],
-            ],
-            "b3",
+        "Catch": [
+            {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "Z",
+            }
         ]
-    ]
-    s = Machine.parse(source)
-    assert s.dry_run() == source
+    }
 
-    c = s.compile()
-    assert c["States"][c["StartAt"]]["Type"] == "Parallel"
+    state = State.parse(source)
+
+    assert isinstance(state, Task)
+    assert len(state.retry) == 2
+    assert len(state.catch) == 1
+
+    assert state.compile() == source
 
 
-def test_choice(example):
-    source = example("choice_state_x")
-    print(source)
+def test_parallel_state():
+    source = {
+        "Type": "Parallel",
+        "Branches": [
+            {
+                "StartAt": "LookupAddress",
+                "States": {
+                    "LookupAddress": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:lambda:us-east-1:123456789012:function:AddressFinder",
+                        "End": True,
+                    },
+                },
+            },
+            {
+                "StartAt": "LookupPhone",
+                "States": {
+                    "LookupPhone": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:lambda:us-east-1:123456789012:function:PhoneFinder",
+                        "End": True,
+                    },
+                },
+            },
+        ],
+        "Next": "NextState",
+    }
 
-    machine = Machine.parse(source)
-    print(machine.to_json())
+    state = State.parse(source)
+
+    assert isinstance(state, Parallel)
+    assert isinstance(state.branches[0], Sequence)
+    assert isinstance(state.branches[0].start_at_state, Task)
+
+    assert json.dumps(state.compile(), sort_keys=True) == json.dumps(source, sort_keys=True)

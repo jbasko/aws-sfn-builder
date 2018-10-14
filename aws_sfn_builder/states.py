@@ -13,14 +13,26 @@ def _generate_name():
 def _parse_dict(d, **fields) -> "State":
     state_types = {
         "Pass": Pass,
-        "Parallel": Parallel,
-        "Choice": Choice,
-        "Fail": Fail,
         "Task": Task,
+        "Choice": Choice,
+        "Wait": Wait,
+        "Succeed": Succeed,
+        "Fail": Fail,
+        "Parallel": Parallel,
+
+        # Our own
+        "Sequence": Sequence,
     }
-    state_cls = state_types.get(d.get("Type", None), State)
+    if "Type" in d:
+        state_cls = state_types[d["Type"]]
+    elif "type" in fields:
+        assert isinstance(fields["type"], str)
+        state_cls = state_types[fields["type"]]
+    else:
+        state_cls = State
     for sl_name in d:
         fields[state_cls.name_from_sl(sl_name)] = d[sl_name]
+    fields.update(state_cls.parse_dict(d))
     return state_cls(**fields)
 
 
@@ -43,6 +55,8 @@ class State:
         "next": "Next",
         "end": "End",
         "resource": "Resource",
+        "input_path": "InputPath",
+        "output_path": "OutputPath",
     })
 
     # Our fields are not part of States Language and therefore
@@ -81,6 +95,14 @@ class State:
 
     @classmethod
     def parse(cls, raw: Any, **fields) -> "State":
+
+        if isinstance(raw, State):
+            # Do not recreate State instance if it is being parsed without any changes
+            if not fields:
+                return raw
+            else:
+                return cls.parse(raw.compile(), **fields)
+
         if isinstance(raw, list):
             raise TypeError()
 
@@ -94,13 +116,36 @@ class State:
         fields.setdefault("name", str(raw))
         fields.setdefault("obj", raw)
 
+        # TODO Create instance of the specified type!
+
         instance = cls(**fields)
         return instance
+
+    @classmethod
+    def parse_dict(cls, d: Dict) -> Dict:
+        """
+        Returns a dictionary listing the attributes of State that should be set.
+        The keys of the returned dictionary are attribute names.
+        The keys in the passed dictionary are States Language field names.
+
+        You only need to implement parsers of nested structures.
+        Plain fields will be translated to correct attributes by the
+        generic parser _parse_dict.
+
+        You will need to call and use the result of super().parse_dict(d)
+        to make sure you don't lose the parent class functionality.
+        """
+        return {}
 
     def compile(self, state_visitor: Callable[["State", Dict], None]=None) -> Dict:
         c = {}
         for f in self._FIELDS.keys():
             value = getattr(self, f, None)
+
+            # TODO Make it cleaner. Looks like a hack. Where does it belong?
+            if f == "type" and value == "Sequence":
+                continue
+
             if value is not None:
                 c[self._FIELDS[f]] = _compile(value, state_visitor=state_visitor)
 
@@ -118,65 +163,39 @@ class State:
 
 
 @dataclasses.dataclass
-class Task(State):
-    type: str = "Task"
-
-
-@dataclasses.dataclass
 class Pass(State):
     _FIELDS = bidict(
         **State._FIELDS,
         **{
             "result": "Result",
+            "result_path": "ResultPath",
         },
     )
 
     type: str = "Pass"
     result: str = None
+    result_path: str = None
 
 
 @dataclasses.dataclass
-class Fail(State):
+class Task(Pass):
+    # Inherits from Pass because it has almost all of the same fields + Retry & Catch
+
     _FIELDS = bidict(
-        **State._FIELDS,
+        **Pass._FIELDS,
         **{
-            "cause": "Cause",
-            "error": "Error",
+            "retry": "Retry",
+            "catch": "Catch",
+            "timeout_seconds": "TimeoutSeconds",
+            "heartbeat_seconds": "HeartbeatSeconds",
         },
     )
 
-    type: str = "Fail"
-    cause: str = None
-    error: str = None
-
-
-@dataclasses.dataclass
-class Parallel(State):
-    _FIELDS = bidict(
-        **State._FIELDS,
-        **{
-            "branches": "Branches",
-        },
-    )
-
-    type: str = "Parallel"
-    branches: List["Sequence"] = dataclasses.field(default_factory=list)
-
-    @classmethod
-    def parse(cls, raw: List) -> "Parallel":
-        assert isinstance(raw, List)
-        return cls(
-            branches=[Sequence.parse(raw_branch) for raw_branch in raw],
-        )
-
-    def dry_run(self, trace: List):
-        parallel_trace = []
-        for branch in self.branches:
-            branch_trace = []
-            branch.dry_run(branch_trace)
-            parallel_trace.append(branch_trace)
-        trace.append(parallel_trace)
-        return self.next
+    type: str = "Task"
+    retry: List = None
+    catch: List = None
+    timeout_seconds: int = None
+    heartbeat_seconds: int = None
 
 
 @dataclasses.dataclass
@@ -195,6 +214,81 @@ class Choice(State):
 
 
 @dataclasses.dataclass
+class Wait(State):
+    _FIELDS = bidict(
+        **State._FIELDS,
+        **{
+            "seconds": "Seconds",
+            "seconds_path": "SecondsPath",
+            "timestamp": "Timestamp",
+            "timestamp_path": "TimestampPath",
+        },
+    )
+
+    type: str = "Wait"
+    seconds: int = None
+    seconds_path: str = None
+    timestamp: str = None
+    timestamp_path: str = None
+
+
+@dataclasses.dataclass
+class Fail(State):
+    _FIELDS = bidict(
+        **State._FIELDS,
+        **{
+            "cause": "Cause",
+            "error": "Error",
+        },
+    )
+
+    type: str = "Fail"
+    cause: str = None
+    error: str = None
+
+
+@dataclasses.dataclass
+class Succeed(State):
+    type: str = "Succeed"
+
+
+@dataclasses.dataclass
+class Parallel(Task):
+
+    _FIELDS = bidict(
+        **Task._FIELDS,
+        **{
+            "branches": "Branches",
+        },
+    )
+
+    type: str = "Parallel"
+    branches: List["Sequence"] = dataclasses.field(default_factory=list)
+
+    @classmethod
+    def parse_list(cls, raw: List) -> "Parallel":
+        assert isinstance(raw, List)
+        return cls(
+            branches=[Sequence.parse_list(raw_branch) for raw_branch in raw],
+        )
+
+    @classmethod
+    def parse_dict(cls, d: Dict):
+        return {
+            "branches": [State.parse(raw_branch, type="Sequence") for raw_branch in d["Branches"]]
+        }
+
+    def dry_run(self, trace: List):
+        parallel_trace = []
+        for branch in self.branches:
+            branch_trace = []
+            branch.dry_run(branch_trace)
+            parallel_trace.append(branch_trace)
+        trace.append(parallel_trace)
+        return self.next
+
+
+@dataclasses.dataclass
 class Sequence(State):
     _FIELDS = bidict(
         **State._FIELDS,
@@ -207,17 +301,21 @@ class Sequence(State):
     start_at: str = None
     states: Dict[str, State] = dataclasses.field(default_factory=dict)
 
+    @property
+    def start_at_state(self) -> State:
+        return self.states[self.start_at]
+
     @classmethod
-    def parse(cls, raw: List) -> "State":
+    def parse_list(cls, raw: List) -> "State":
         if not isinstance(raw, list):
             raise TypeError(raw)
         if raw and all(isinstance(item, list) for item in raw):
-            return Parallel.parse(raw)
+            return Parallel.parse_list(raw)
         else:
             states = []
             for raw_state in raw:
                 if isinstance(raw_state, list):
-                    states.append(Sequence.parse(raw_state))
+                    states.append(Sequence.parse_list(raw_state))
                 else:
                     states.append(Task.parse(raw_state))
         for i, state in enumerate(states[:-1]):
@@ -226,6 +324,12 @@ class Sequence(State):
             start_at=states[0].name,
             states={s.name: s for s in states},
         )
+
+    @classmethod
+    def parse_dict(cls, d: Dict):
+        return {
+            "states": {k: State.parse(v) for k, v in d["States"].items()},
+        }
 
     def dry_run(self, trace):
         state = self.states[self.start_at]
@@ -240,7 +344,7 @@ class Machine(Sequence):
     @classmethod
     def parse(cls, raw: Union[List, Dict]) -> "Machine":
         if isinstance(raw, list):
-            sequence = super().parse(raw)
+            sequence = super().parse_list(raw)
             if isinstance(sequence, Parallel):
                 return cls(start_at=sequence.name, states={sequence.name: sequence})
             assert isinstance(sequence, Machine)

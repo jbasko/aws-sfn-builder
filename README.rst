@@ -33,7 +33,7 @@ Make this into a State machine definition with ``Machine.parse(raw).to_json()``.
 If you need to customise the compiled dictionaries, you can pass ``state_visitor=`` keyword argument
 to ``to_json`` (or to ``compile()``). State visitor is a function that takes two positional arguments: the
 object representing the state, and the dictionary that we have compiled to represent the state in the
-state machine definitionas expected by AWS.
+state machine definition as expected by AWS.
 
 Here's a result of ``Machine.parse(raw).to_json()``:
 

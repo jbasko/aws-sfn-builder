@@ -1,6 +1,6 @@
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 
-from .states import Choice, Machine, Parallel, Pass, Sequence, State, Task
+from .states import Choice, Machine, Parallel, Pass, Sequence, State, Succeed, Task, Wait
 
 __all__ = [
     "Choice",
@@ -9,5 +9,7 @@ __all__ = [
     "Pass",
     "Sequence",
     "State",
+    "Succeed",
     "Task",
+    "Wait",
 ]
