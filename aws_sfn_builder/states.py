@@ -1,9 +1,12 @@
 import json
-from typing import Any, Callable, Dict, List, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 from uuid import uuid4
 
 import dataclasses
 from bidict import bidict
+
+from .base import Node
+from .choice_rules import ChoiceRule
 
 
 def _generate_name():
@@ -58,61 +61,20 @@ class States:
         return state.type in cls._INTERNAL
 
 
-def _parse_dict(d, **fields) -> "State":
-    state_types = {
-        States.Pass: Pass,
-        States.Task: Task,
-        States.Choice: Choice,
-        States.Wait: Wait,
-        States.Succeed: Succeed,
-        States.Fail: Fail,
-        States.Parallel: Parallel,
-
-        # Internal
-        States.Sequence: Sequence,
-        States.Machine: Machine,
-    }
-    if "Type" in d:
-        state_cls = state_types[d["Type"]]
-    elif "type" in fields:
-        assert isinstance(fields["type"], str)
-        state_cls = state_types[fields["type"]]
-    else:
-        # Dictionary with no type defaults to Task which is most likely state
-        # that user wants to instantiate.
-        state_cls = Task
-    for sl_name in d:
-        fields[state_cls.name_from_sl(sl_name)] = d[sl_name]
-    fields.update(state_cls.parse_dict(d))
-
-    try:
-        return state_cls(**fields)
-    except TypeError as e:
-        raise TypeError(f"Failed to instantiate {state_cls} because of: {e!r}")
-
-
-def _compile(value, state_visitor: Callable[["State", Dict], None]=None):
-    if isinstance(value, State):
-        return value.compile(state_visitor=state_visitor)
-    elif isinstance(value, list):
-        return [_compile(item, state_visitor=state_visitor) for item in value]
-    elif isinstance(value, dict):
-        return {k: _compile(v, state_visitor=state_visitor) for k, v in value.items()}
-    else:
-        return value
-
-
 @dataclasses.dataclass
-class State:
-    _FIELDS = bidict({
-        "type": "Type",
-        "comment": "Comment",
-        "next": "Next",
-        "end": "End",
-        "resource": "Resource",
-        "input_path": "InputPath",
-        "output_path": "OutputPath",
-    })
+class State(Node):
+    _FIELDS = bidict(
+        **Node._FIELDS,
+        **{
+            "type": "Type",
+            "comment": "Comment",
+            "next": "Next",
+            "end": "End",
+            "resource": "Resource",
+            "input_path": "InputPath",
+            "output_path": "OutputPath",
+        },
+    )
 
     # Our fields are not part of States Language and therefore
     # should not be included in the compiled definitions, but
@@ -120,24 +82,6 @@ class State:
     _OUR_FIELDS = bidict({
         "name": "Name",
     })
-
-    @classmethod
-    def name_from_sl(cls, name):
-        """
-        Translate a field name from States Language.
-        """
-        if name in cls._FIELDS.inv:
-            return cls._FIELDS.inv[name]
-        elif name in cls._OUR_FIELDS.inv:
-            return cls._OUR_FIELDS.inv[name]
-        raise KeyError(name)
-
-    @classmethod
-    def name_to_sl(cls, name):
-        """
-        Translate an attribute name to States Language.
-        """
-        return cls._FIELDS[name]
 
     obj: Any = None  # TODO Rename it to raw_obj
     name: str = dataclasses.field(default_factory=_generate_name)
@@ -153,80 +97,31 @@ class State:
 
     @classmethod
     def parse(cls, raw: Any, **fields) -> "State":
+        # Dictionary with no type defaults to Task which is most likely state
+        # that user wants to instantiate.
+        if not isinstance(raw, State):
+            fields.setdefault("type", States.Task)
+        return super().parse(raw, **fields)
 
-        if isinstance(raw, State):
-            # Do not recreate State instance if it is being parsed without any changes
-            if not fields:
-                return raw
-            else:
-                return cls.parse(raw.compile(), **fields)
+    def compile(self, **compile_options) -> Dict:
+        c = super().compile(**compile_options)
 
-        if isinstance(raw, list):
-            raise TypeError()
+        # Do not include "Type" for our internal "states" such as "Machine" or "Sequence".
+        if States.is_internal(self) and "Type" in c:
+            del c["Type"]
 
-        if isinstance(raw, dict):
-            if "Name" in raw:
-                fields.setdefault("name", raw["Name"])
-            elif "Resource" in raw:
-                fields.setdefault("name", raw["Resource"])
-            elif "Comment" in raw:
-                fields.setdefault("name", raw["Comment"])
-            return _parse_dict(raw, **fields)
-
-        fields.setdefault("name", str(raw))
-        fields.setdefault("obj", raw)
-
-        # TODO Create instance of the specified type!
-
-        instance = cls(**fields)
-        return instance
-
-    @classmethod
-    def parse_dict(cls, d: Dict) -> Dict:
-        """
-        Returns a dictionary listing the attributes of State that should be set.
-        The keys of the returned dictionary are attribute names.
-        The keys in the passed dictionary are States Language field names.
-
-        You only need to implement parsers of nested structures.
-        Plain fields will be translated to correct attributes by the
-        generic parser _parse_dict.
-
-        You will need to call and use the result of super().parse_dict(d)
-        to make sure you don't lose the parent class functionality.
-        """
-        return {}
-
-    def compile_dict(self, c: Dict) -> None:
-        """
-        A hook for custom State to add its custom compile logic.
-        Do not call super.
-        The dictionary should be modified in place.
-        This is called before applying external handlers (state_visitor).
-        """
-        pass
-
-    def compile(self, state_visitor: Callable[["State", Dict], None]=None) -> Dict:
-        c = {}
-        for f in self._FIELDS.keys():
-            value = getattr(self, f, None)
-
-            # Do not include "Type" for our internal "states" such as "Machine" or "Sequence".
-            if f == "type" and States.is_internal(self):
-                continue
-
-            if value is not None:
-                c[self._FIELDS[f]] = _compile(value, state_visitor=state_visitor)
-
-        self.compile_dict(c)
-
+        # TODO Rethink this feature.
         if hasattr(self.obj, 'get_state_attrs'):
             c.update(getattr(self.obj, 'get_state_attrs')(state=self))
 
+        state_visitor = compile_options.get('state_visitor')
         if state_visitor is not None:
             state_visitor(self, c)
 
         return c
+
+    def execute(self, input, resource_resolver: Callable) -> Tuple[Optional[str], Any]:
+        raise NotImplementedError()
 
     def dry_run(self, trace: List):
         trace.append(self.name)
@@ -284,8 +179,18 @@ class Choice(State):
     )
 
     type: str = States.Choice
-    choices: List = dataclasses.field(default_factory=list)
+    choices: List[ChoiceRule] = dataclasses.field(default_factory=list)
     default: str = None
+
+    @classmethod
+    def parse_dict(cls, d: Dict, fields: Dict) -> None:
+        fields["choices"] = [ChoiceRule.parse(raw_choice_rule) for raw_choice_rule in d["Choices"]]
+
+    def execute(self, input, resource_resolver: Callable):
+        for choice_rule in self.choices:
+            if choice_rule.matches(input):
+                return choice_rule.next, input
+        return self.default, input
 
 
 @dataclasses.dataclass
@@ -353,10 +258,8 @@ class Parallel(Task):
         )
 
     @classmethod
-    def parse_dict(cls, d: Dict):
-        return {
-            "branches": [State.parse(raw_branch, type="Sequence") for raw_branch in d["Branches"]]
-        }
+    def parse_dict(cls, d: Dict, fields: Dict) -> None:
+        fields["branches"] = [State.parse(raw_branch, type="Sequence") for raw_branch in d["Branches"]]
 
     def compile_dict(self, c: Dict):
         if self.next is None:
@@ -413,10 +316,8 @@ class Sequence(State):
         )
 
     @classmethod
-    def parse_dict(cls, d: Dict):
-        return {
-            "states": {k: State.parse(v) for k, v in d["States"].items()},
-        }
+    def parse_dict(cls, d: Dict, fields: Dict) -> None:
+        fields["states"] = {k: State.parse(v) for k, v in d["States"].items()}
 
     def dry_run(self, trace):
         state = self.states[self.start_at]

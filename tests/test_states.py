@@ -7,7 +7,9 @@ import json
 
 import pytest
 
-from aws_sfn_builder import Fail, Machine, Parallel, Pass, Sequence, State, States, Succeed, Task, Wait
+from aws_sfn_builder import (
+    Choice, ChoiceRule, Fail, Machine, Parallel, Pass, Sequence, State, States, Succeed, Task, Wait
+)
 
 
 def test_parse_of_state_is_the_state_itself():
@@ -81,6 +83,10 @@ def test_choice_state(example):
     source = example("choice_state_x")["States"]["ChoiceStateX"]
 
     state = State.parse(source)
+
+    assert isinstance(state, Choice)
+    assert isinstance(state.choices[0], ChoiceRule)
+    assert state.choices[0].operator
 
     assert state.compile() == source
 

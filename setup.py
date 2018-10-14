@@ -28,6 +28,7 @@ setup(
     install_requires=[
         "bidict",
         "dataclasses",
+        "jsonpath-ng",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
