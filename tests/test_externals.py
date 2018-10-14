@@ -21,10 +21,10 @@ def test_dicts_as_states():
     ])
 
     c = m.compile()
-    assert c["StartAt"] == "first"
+    assert c["StartAt"] == "arn:first"
     assert len(c["States"]) == 3
-    assert c["States"]["first"]["Comment"] == "first"
-    assert c["States"]["first"]["Resource"] == "arn:first"
+    assert c["States"]["arn:first"]["Comment"] == "first"
+    assert c["States"]["arn:first"]["Resource"] == "arn:first"
     assert "Name" not in c["States"]["second"]
     assert c["States"]["second"]["Type"] == "Pass"
 

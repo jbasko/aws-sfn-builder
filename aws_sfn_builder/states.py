@@ -10,18 +10,67 @@ def _generate_name():
     return str(uuid4())
 
 
+class States:
+    """
+    Namespace for all names of states.
+    """
+
+    Pass = "Pass"
+    Task = "Task"
+    Choice = "Choice"
+    Wait = "Wait"
+    Succeed = "Succeed"
+    Fail = "Fail"
+    Parallel = "Parallel"
+
+    Sequence = "Sequence"
+    Machine = "Machine"
+
+    ALL = [
+        Pass,
+        Task,
+        Choice,
+        Wait,
+        Succeed,
+        Fail,
+        Parallel,
+        Sequence,
+        Machine,
+    ]
+
+    _TERMINAL = [
+        Succeed,
+        Fail,
+        # + any End State
+    ]
+
+    _INTERNAL = [
+        Sequence,
+        Machine,
+    ]
+
+    @classmethod
+    def is_terminal(cls, state: "State"):
+        return state.next is None or state.type in cls._TERMINAL
+
+    @classmethod
+    def is_internal(cls, state: "State"):
+        return state.type in cls._INTERNAL
+
+
 def _parse_dict(d, **fields) -> "State":
     state_types = {
-        "Pass": Pass,
-        "Task": Task,
-        "Choice": Choice,
-        "Wait": Wait,
-        "Succeed": Succeed,
-        "Fail": Fail,
-        "Parallel": Parallel,
+        States.Pass: Pass,
+        States.Task: Task,
+        States.Choice: Choice,
+        States.Wait: Wait,
+        States.Succeed: Succeed,
+        States.Fail: Fail,
+        States.Parallel: Parallel,
 
-        # Our own
-        "Sequence": Sequence,
+        # Internal
+        States.Sequence: Sequence,
+        States.Machine: Machine,
     }
     if "Type" in d:
         state_cls = state_types[d["Type"]]
@@ -29,11 +78,17 @@ def _parse_dict(d, **fields) -> "State":
         assert isinstance(fields["type"], str)
         state_cls = state_types[fields["type"]]
     else:
-        state_cls = State
+        # Dictionary with no type defaults to Task which is most likely state
+        # that user wants to instantiate.
+        state_cls = Task
     for sl_name in d:
         fields[state_cls.name_from_sl(sl_name)] = d[sl_name]
     fields.update(state_cls.parse_dict(d))
-    return state_cls(**fields)
+
+    try:
+        return state_cls(**fields)
+    except TypeError as e:
+        raise TypeError(f"Failed to instantiate {state_cls} because of: {e!r}")
 
 
 def _compile(value, state_visitor: Callable[["State", Dict], None]=None):
@@ -92,6 +147,9 @@ class State:
     next: str = None
     end: bool = None
     resource: str = None
+    input_path: str = None
+    output_path: str = None
+    result_path: str = None
 
     @classmethod
     def parse(cls, raw: Any, **fields) -> "State":
@@ -109,6 +167,8 @@ class State:
         if isinstance(raw, dict):
             if "Name" in raw:
                 fields.setdefault("name", raw["Name"])
+            elif "Resource" in raw:
+                fields.setdefault("name", raw["Resource"])
             elif "Comment" in raw:
                 fields.setdefault("name", raw["Comment"])
             return _parse_dict(raw, **fields)
@@ -142,8 +202,8 @@ class State:
         for f in self._FIELDS.keys():
             value = getattr(self, f, None)
 
-            # TODO Make it cleaner. Looks like a hack. Where does it belong?
-            if f == "type" and value == "Sequence":
+            # Do not include "Type" for our internal "states" such as "Machine" or "Sequence".
+            if f == "type" and States.is_internal(self):
                 continue
 
             if value is not None:
@@ -172,7 +232,7 @@ class Pass(State):
         },
     )
 
-    type: str = "Pass"
+    type: str = States.Pass
     result: str = None
     result_path: str = None
 
@@ -191,7 +251,7 @@ class Task(Pass):
         },
     )
 
-    type: str = "Task"
+    type: str = States.Task
     retry: List = None
     catch: List = None
     timeout_seconds: int = None
@@ -208,7 +268,7 @@ class Choice(State):
         },
     )
 
-    type: str = "Choice"
+    type: str = States.Choice
     choices: List = dataclasses.field(default_factory=list)
     default: str = None
 
@@ -225,7 +285,7 @@ class Wait(State):
         },
     )
 
-    type: str = "Wait"
+    type: str = States.Wait
     seconds: int = None
     seconds_path: str = None
     timestamp: str = None
@@ -242,14 +302,14 @@ class Fail(State):
         },
     )
 
-    type: str = "Fail"
+    type: str = States.Fail
     cause: str = None
     error: str = None
 
 
 @dataclasses.dataclass
 class Succeed(State):
-    type: str = "Succeed"
+    type: str = States.Succeed
 
 
 @dataclasses.dataclass
@@ -262,7 +322,7 @@ class Parallel(Task):
         },
     )
 
-    type: str = "Parallel"
+    type: str = States.Parallel
     branches: List["Sequence"] = dataclasses.field(default_factory=list)
 
     @classmethod
@@ -298,6 +358,7 @@ class Sequence(State):
         },
     )
 
+    type: str = States.Sequence
     start_at: str = None
     states: Dict[str, State] = dataclasses.field(default_factory=dict)
 
@@ -394,6 +455,17 @@ class Sequence(State):
 
 @dataclasses.dataclass
 class Machine(Sequence):
+    _FIELDS = bidict(
+        **Sequence._FIELDS,
+        **{
+            "version": "Version",
+            "timeout_seconds": "TimeoutSeconds",
+        },
+    )
+
+    type: str = States.Machine
+    timeout_seconds: int = None
+    version: str = None
 
     @classmethod
     def parse(cls, raw: Union[List, Dict]) -> "Machine":
@@ -404,11 +476,8 @@ class Machine(Sequence):
             assert isinstance(sequence, Machine)
             return sequence
         elif isinstance(raw, dict):
-            # Could be a proper state machine definition
-            return cls(
-                start_at=raw["StartAt"],
-                states={state_name: Task.parse(state, name=state_name) for state_name, state in raw["States"].items()},
-            )
+            # Proper state machine definition
+            return Sequence.parse(raw, type=States.Machine)
         else:
             raise TypeError(raw)
 
@@ -424,6 +493,15 @@ class Machine(Sequence):
         return json.dumps(self.compile(state_visitor=state_visitor), **json_options)
 
     def dry_run(self, trace: List=None):
+        """
+        DEPRECATED.
+        This probably will change in near future so don't rely on it.
+
+        A simple tracer for primitive state machines that consist only of sequences and paralellisations.
+        Can be used to trace the basic structure.
+        Returns a list of state names in the execution order.
+        """
+
         if trace is None:
             trace = []
 

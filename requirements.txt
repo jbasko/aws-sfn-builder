@@ -1,5 +1,6 @@
 bidict
 dataclasses
+jsonpath-ng
 
 autoboto
 flake8

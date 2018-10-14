@@ -1,4 +1,4 @@
-from aws_sfn_builder import Machine, Parallel
+from aws_sfn_builder import Machine, Parallel, State, States
 
 
 def test_empty_machine():
@@ -66,3 +66,13 @@ def test_parallel_inside_parallel():
 
     c = s.compile()
     assert c["States"][c["StartAt"]]["Type"] == "Parallel"
+
+
+def test_dictionary_with_no_type_defaults_to_task():
+    state = State.parse({
+        "InputPath": "$.first_input",
+        "ResultPath": "$.first_output",
+        "Resource": "MultiplierByTwo",
+    })
+
+    assert state.type == States.Task

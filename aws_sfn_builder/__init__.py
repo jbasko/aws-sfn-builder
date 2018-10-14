@@ -1,14 +1,19 @@
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 
-from .states import Choice, Machine, Parallel, Pass, Sequence, State, Succeed, Task, Wait
+from .runner import ResourceManager, Runner
+from .states import Choice, Fail, Machine, Parallel, Pass, Sequence, State, States, Succeed, Task, Wait
 
 __all__ = [
+    "ResourceManager",
+    "Runner",
     "Choice",
+    "Fail",
     "Machine",
     "Parallel",
     "Pass",
     "Sequence",
     "State",
+    "States",
     "Succeed",
     "Task",
     "Wait",

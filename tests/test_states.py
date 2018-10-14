@@ -7,8 +7,7 @@ import json
 
 import pytest
 
-from aws_sfn_builder import Pass, State, Succeed, Task, Wait
-from aws_sfn_builder.states import Fail, Parallel, Sequence
+from aws_sfn_builder import Fail, Machine, Parallel, Pass, Sequence, State, States, Succeed, Task, Wait
 
 
 def test_parse_of_state_is_the_state_itself():
@@ -57,6 +56,17 @@ def test_task_state():
     assert isinstance(state, Task)
 
     assert state.compile() == source
+
+
+def test_task_uses_resource_as_default_name_ahead_of_comment():
+    source = {
+        "Type": "Task",
+        "Resource": "arn:something",
+        "Comment": "this is doing something",
+    }
+
+    state = State.parse(source)
+    assert state.name == "arn:something"
 
 
 def test_choice_state(example):
@@ -182,3 +192,14 @@ def test_parallel_state():
     assert isinstance(state.branches[0].start_at_state, Task)
 
     assert json.dumps(state.compile(), sort_keys=True) == json.dumps(source, sort_keys=True)
+
+
+def test_machine_state(example):
+    source = example("hello_world")
+
+    machine = Machine.parse(source)
+
+    assert machine.type == States.Machine
+    assert isinstance(machine.start_at_state, Task)
+
+    assert machine.compile() == source
