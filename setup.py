@@ -30,6 +30,14 @@ setup(
         "dataclasses",
         "jsonpath-ng",
     ],
+    keywords=[
+        "aws",
+        "asl",
+        "sfn",
+        "step functions",
+        "state machine",
+        "boilerplate",
+    ],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
