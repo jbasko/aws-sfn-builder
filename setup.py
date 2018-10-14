@@ -26,6 +26,7 @@ setup(
     packages=find_packages(exclude=["integration_tests", "tests"]),
     python_requires=">=3.6.0",
     install_requires=[
+        "bidict",
         "dataclasses",
     ],
     classifiers=[

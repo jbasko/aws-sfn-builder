@@ -1,81 +1,111 @@
 import json
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Type, Union
 from uuid import uuid4
 
 import dataclasses
+from bidict import bidict
 
 
 def _generate_name():
     return str(uuid4())
 
 
+def _parse_dict(d, **fields) -> "State":
+    state_types = {
+        "Pass": Pass,
+        "Parallel": Parallel,
+        "Choice": Choice,
+        "Fail": Fail,
+        "Task": Task,
+    }
+    state_cls = state_types.get(d.get("Type", None), State)
+    for sl_name in d:
+        fields[state_cls.name_from_sl(sl_name)] = d[sl_name]
+    return state_cls(**fields)
+
+
+def _compile(value, state_visitor: Callable[["State", Dict], None]=None):
+    if isinstance(value, State):
+        return value.compile(state_visitor=state_visitor)
+    elif isinstance(value, list):
+        return [_compile(item, state_visitor=state_visitor) for item in value]
+    elif isinstance(value, dict):
+        return {k: _compile(v, state_visitor=state_visitor) for k, v in value.items()}
+    else:
+        return value
+
+
 @dataclasses.dataclass
 class State:
-    name: str = dataclasses.field(default_factory=_generate_name)
-    obj: Any = None
-    next_state: Optional["State"] = None
+    _FIELDS = bidict({
+        "type": "Type",
+        "comment": "Comment",
+        "next": "Next",
+        "end": "End",
+        "resource": "Resource",
+    })
 
-    # These fields can be used in half-baked state representations and if set
-    # will be compiled into the state machine definition.
-    _INJECTABLE_FIELDS = (
-        "Type",
-        "Comment",
-        "Resource",
-        "InputPath",
-        "ResultPath",
-        "OutputPath",
-        "Result",
-        "Retry",
-        "Catch",
-        "Choices",
-        "Default",
-        "TimeoutSeconds",
-        "HeartbeatSeconds",
-        "Seconds",
-        "Error",
-        "Cause",
-        "Branches",
-        "Next",  # if you inject this you are on your own
-        "End",  # if you inject this you are on your own
-    )
+    # Our fields are not part of States Language and therefore
+    # should not be included in the compiled definitions, but
+    # are accepted in the input.
+    _OUR_FIELDS = bidict({
+        "name": "Name",
+    })
 
     @classmethod
-    def parse(cls, raw: Any) -> "State":
+    def name_from_sl(cls, name):
+        """
+        Translate a field name from States Language.
+        """
+        if name in cls._FIELDS.inv:
+            return cls._FIELDS.inv[name]
+        elif name in cls._OUR_FIELDS.inv:
+            return cls._OUR_FIELDS.inv[name]
+        raise KeyError(name)
+
+    @classmethod
+    def name_to_sl(cls, name):
+        """
+        Translate an attribute name to States Language.
+        """
+        return cls._FIELDS[name]
+
+    obj: Any = None  # TODO Rename it to raw_obj
+    name: str = dataclasses.field(default_factory=_generate_name)
+
+    type: Type = None
+    comment: str = None
+    next: str = None
+    end: bool = None
+    resource: str = None
+
+    @classmethod
+    def parse(cls, raw: Any, **fields) -> "State":
         if isinstance(raw, list):
             raise TypeError()
 
-        # Allow user to pass a half-baked dictionary representing the state
-        # (with additional, non-standard "Name" field)
-        name = str(raw)
         if isinstance(raw, dict):
             if "Name" in raw:
-                name = raw["Name"]
+                fields.setdefault("name", raw["Name"])
             elif "Comment" in raw:
-                name = raw["Comment"]
-            else:
-                # Use an auto-generated name as str(dict) will be a bad name
-                name = None
+                fields.setdefault("name", raw["Comment"])
+            return _parse_dict(raw, **fields)
 
-        instance = cls(name=name, obj=raw)
+        fields.setdefault("name", str(raw))
+        fields.setdefault("obj", raw)
+
+        instance = cls(**fields)
         return instance
 
     def compile(self, state_visitor: Callable[["State", Dict], None]=None) -> Dict:
-        c = {
-            "Type": "Task",
-        }
-
-        if self.next_state:
-            c["Next"] = self.next_state.name
-        else:
-            c["End"] = True
+        c = {}
+        for f in self._FIELDS.keys():
+            value = getattr(self, f, None)
+            if value is not None:
+                c[self._FIELDS[f]] = _compile(value, state_visitor=state_visitor)
 
         if hasattr(self.obj, 'get_state_attrs'):
             c.update(getattr(self.obj, 'get_state_attrs')(state=self))
-
-        if isinstance(self.obj, dict):
-            for k in self._INJECTABLE_FIELDS:
-                if k in self.obj:
-                    c[k] = self.obj[k]
 
         if state_visitor is not None:
             state_visitor(self, c)
@@ -84,11 +114,52 @@ class State:
 
     def dry_run(self, trace: List):
         trace.append(self.name)
-        return self.next_state
+        return self.next
+
+
+@dataclasses.dataclass
+class Task(State):
+    type: str = "Task"
+
+
+@dataclasses.dataclass
+class Pass(State):
+    _FIELDS = bidict(
+        **State._FIELDS,
+        **{
+            "result": "Result",
+        },
+    )
+
+    type: str = "Pass"
+    result: str = None
+
+
+@dataclasses.dataclass
+class Fail(State):
+    _FIELDS = bidict(
+        **State._FIELDS,
+        **{
+            "cause": "Cause",
+            "error": "Error",
+        },
+    )
+
+    type: str = "Fail"
+    cause: str = None
+    error: str = None
 
 
 @dataclasses.dataclass
 class Parallel(State):
+    _FIELDS = bidict(
+        **State._FIELDS,
+        **{
+            "branches": "Branches",
+        },
+    )
+
+    type: str = "Parallel"
     branches: List["Sequence"] = dataclasses.field(default_factory=list)
 
     @classmethod
@@ -98,17 +169,6 @@ class Parallel(State):
             branches=[Sequence.parse(raw_branch) for raw_branch in raw],
         )
 
-    def compile(self, state_visitor: Callable[["State", Dict], None]=None) -> Dict:
-        c = {
-            **super().compile(),
-            "Type": "Parallel",
-            "Comment": self.name,
-            "Branches": [b.compile(state_visitor=state_visitor) for b in self.branches],
-        }
-        if state_visitor is not None:
-            state_visitor(self, c)
-        return c
-
     def dry_run(self, trace: List):
         parallel_trace = []
         for branch in self.branches:
@@ -116,12 +176,35 @@ class Parallel(State):
             branch.dry_run(branch_trace)
             parallel_trace.append(branch_trace)
         trace.append(parallel_trace)
-        return self.next_state
+        return self.next
+
+
+@dataclasses.dataclass
+class Choice(State):
+    _FIELDS = bidict(
+        **State._FIELDS,
+        **{
+            "choices": "Choices",
+            "default": "Default",
+        },
+    )
+
+    type: str = "Choice"
+    choices: List = dataclasses.field(default_factory=list)
+    default: str = None
 
 
 @dataclasses.dataclass
 class Sequence(State):
-    start_at: State = None
+    _FIELDS = bidict(
+        **State._FIELDS,
+        **{
+            "start_at": "StartAt",
+            "states": "States",
+        },
+    )
+
+    start_at: str = None
     states: Dict[str, State] = dataclasses.field(default_factory=dict)
 
     @classmethod
@@ -136,40 +219,40 @@ class Sequence(State):
                 if isinstance(raw_state, list):
                     states.append(Sequence.parse(raw_state))
                 else:
-                    states.append(State.parse(raw_state))
+                    states.append(Task.parse(raw_state))
         for i, state in enumerate(states[:-1]):
-            state.next_state = states[i + 1]
+            state.next = states[i + 1].name
         return cls(
-            start_at=states[0],
+            start_at=states[0].name,
             states={s.name: s for s in states},
         )
 
     def dry_run(self, trace):
-        state = self.start_at
+        state = self.states[self.start_at]
         while state is not None:
-            state = state.dry_run(trace)
-        return self.next_state
-
-    def compile(self, state_visitor: Callable[["State", Dict], None]=None) -> Dict:
-        compiled_state = {
-            "StartAt": self.start_at.name,
-            "States": {s.name: s.compile(state_visitor=state_visitor) for s in self.states.values()},
-        }
-        if state_visitor is not None:
-            state_visitor(self, compiled_state)
-        return compiled_state
+            state = self.states.get(state.dry_run(trace))
+        return self.next
 
 
 @dataclasses.dataclass
 class Machine(Sequence):
 
     @classmethod
-    def parse(cls, raw: List) -> "Machine":
-        sequence = super().parse(raw)
-        if isinstance(sequence, Parallel):
-            return Machine(start_at=sequence, states={sequence.name: sequence})
-        assert isinstance(sequence, Machine)
-        return sequence
+    def parse(cls, raw: Union[List, Dict]) -> "Machine":
+        if isinstance(raw, list):
+            sequence = super().parse(raw)
+            if isinstance(sequence, Parallel):
+                return cls(start_at=sequence.name, states={sequence.name: sequence})
+            assert isinstance(sequence, Machine)
+            return sequence
+        elif isinstance(raw, dict):
+            # Could be a proper state machine definition
+            return cls(
+                start_at=raw["StartAt"],
+                states={state_name: Task.parse(state, name=state_name) for state_name, state in raw["States"].items()},
+            )
+        else:
+            raise TypeError(raw)
 
     def to_json(self, json_options=None, state_visitor: Callable[[State, Dict], None]=None):
         """
@@ -185,11 +268,11 @@ class Machine(Sequence):
     def dry_run(self, trace: List=None):
         if trace is None:
             trace = []
-        state = self.start_at
+        state = self.states[self.start_at]
         while state is not None:
-            state = state.dry_run(trace)
+            state = self.states.get(state.dry_run(trace))
 
-        if len(self.states) == 1 and isinstance(self.start_at, Parallel):
+        if len(self.states) == 1 and isinstance(self.states[self.start_at], Parallel):
             # When the state machine consists of just one Parallel,
             # remove the extra wrapping list.
             return trace[0]
