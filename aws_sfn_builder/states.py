@@ -197,6 +197,15 @@ class State:
         """
         return {}
 
+    def compile_dict(self, c: Dict) -> None:
+        """
+        A hook for custom State to add its custom compile logic.
+        Do not call super.
+        The dictionary should be modified in place.
+        This is called before applying external handlers (state_visitor).
+        """
+        pass
+
     def compile(self, state_visitor: Callable[["State", Dict], None]=None) -> Dict:
         c = {}
         for f in self._FIELDS.keys():
@@ -208,6 +217,8 @@ class State:
 
             if value is not None:
                 c[self._FIELDS[f]] = _compile(value, state_visitor=state_visitor)
+
+        self.compile_dict(c)
 
         if hasattr(self.obj, 'get_state_attrs'):
             c.update(getattr(self.obj, 'get_state_attrs')(state=self))
@@ -235,6 +246,10 @@ class Pass(State):
     type: str = States.Pass
     result: str = None
     result_path: str = None
+
+    def compile_dict(self, c: Dict):
+        if self.next is None:
+            c["End"] = True
 
 
 @dataclasses.dataclass
@@ -291,6 +306,10 @@ class Wait(State):
     timestamp: str = None
     timestamp_path: str = None
 
+    def compile_dict(self, c: Dict):
+        if self.next is None:
+            c["End"] = True
+
 
 @dataclasses.dataclass
 class Fail(State):
@@ -337,6 +356,10 @@ class Parallel(Task):
         return {
             "branches": [State.parse(raw_branch, type="Sequence") for raw_branch in d["Branches"]]
         }
+
+    def compile_dict(self, c: Dict):
+        if self.next is None:
+            c["End"] = True
 
     def dry_run(self, trace: List):
         parallel_trace = []

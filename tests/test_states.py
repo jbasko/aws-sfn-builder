@@ -58,6 +58,14 @@ def test_task_state():
     assert state.compile() == source
 
 
+def test_task_state_compiled_always_has_next_or_end():
+    task = State.parse({
+        "Type": "Task",
+    }).compile()
+
+    assert task.get("Next") or task["End"] is True
+
+
 def test_task_uses_resource_as_default_name_ahead_of_comment():
     source = {
         "Type": "Task",
