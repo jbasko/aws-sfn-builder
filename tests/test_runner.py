@@ -1,75 +1,66 @@
 import pytest
 
-from aws_sfn_builder import Machine, Runner
+from aws_sfn_builder import Machine, ResourceManager, Runner, State
 
 
-def test_executes_hello_world(example):
-    hello_world_source = example("hello_world")
-
-    sm = Machine.parse(hello_world_source)
-
-    runner = Runner()
-
-    @runner.resource_provider("arn:aws:lambda:us-east-1:123456789012:function:HelloWorld")
-    def hello_world(payload):
-        return '"Hello, world!"'
-
-    assert runner.run(sm) == (None, '"Hello, world!"')
-
-
-@pytest.mark.parametrize("result_path,expected_output", [
-    ["$.status", {"guid": "guid-value", "status": 'job is okay'}],
-    ["$", "job is okay"],
-    [None, "job is okay"],  # TODO This is not according to the spec.
+@pytest.mark.parametrize("input_path,expected_resource_input", [
+    [None, {"guid": "123-456"}],
+    ["$", {"guid": "123-456"}],
+    ["$.guid", "123-456"],
 ])
-def test_basic_result_path(result_path, expected_output):
-    sm = Machine.parse([
-        {
-            "Type": "Task",
-            "Resource": "check_job",
-            "InputPath": "$.guid",
-            "ResultPath": result_path,
-        },
-    ])
-
-    runner = Runner()
-
-    @runner.resource_provider("check_job")
-    def check_job(payload):
-        assert payload == "guid-value"
-        return 'job is okay'
-
-    state, output = runner.run(sm, input={"guid": "guid-value"})
-    assert state is None
-    assert output == expected_output
+def test_format_resource_input_returns_filtered_input(input_path, expected_resource_input):
+    state = State.parse({
+        "InputPath": input_path
+    })
+    resource_input = state.format_state_input({"guid": "123-456"})
+    assert expected_resource_input == resource_input
 
 
-@pytest.mark.parametrize("output_path,expected_output", [
-    ["$.guid", "guid-value"],
-    ["$", {"guid": "guid-value", "status": 'job is okay'}],
-    [None, {"guid": "guid-value", "status": 'job is okay'}],  # TODO Again, this is non-standard, needs fixing.
+@pytest.mark.parametrize("result_path,expected_result", [
+    [None, "ok"],
+    ["$", "ok"],
+    ["$.status", {"guid": "123-456", "status": "ok"}]
 ])
-def test_basic_output_path(output_path, expected_output):
-    sm = Machine.parse([
-        {
-            "Type": "Task",
-            "Resource": "check_job",
-            "InputPath": "$.guid",
-            "ResultPath": "$.status",
-            "OutputPath": output_path,
-        },
-    ])
+def test_format_result_returns_applied_result(result_path, expected_result):
+    state = State.parse({
+        "ResultPath": result_path,
+    })
+    result = state.format_result({"guid": "123-456"}, "ok")
+    assert expected_result == result
 
-    runner = Runner()
 
-    @runner.resource_provider("check_job")
-    def check_job(payload):
-        assert payload == "guid-value"
-        return 'job is okay'
+@pytest.mark.parametrize("output_path,expected_state_output", [
+    [None, {"guid": "123-456"}],
+    ["$", {"guid": "123-456"}],
+    ["$.guid", "123-456"],
+])
+def test_format_state_output_returns_filtered_output(output_path, expected_state_output):
+    state = State.parse({
+        "OutputPath": output_path
+    })
+    state_output = state.format_state_output({"guid": "123-456"})
+    assert expected_state_output == state_output
 
-    state, output = runner.run(sm, input={"guid": "guid-value"})
-    assert state is None
-    assert output == expected_output
+
+def test_executes_hello_world_state(example):
+    hello_world_state = Machine.parse(example("hello_world")).start_at_state
+    assert isinstance(hello_world_state, State)
+
+    resources = ResourceManager(providers={
+        "arn:aws:lambda:us-east-1:123456789012:function:HelloWorld": lambda x: "Hello, world!"
+    })
+    next_state, output = hello_world_state.execute({}, resource_resolver=resources)
+    assert output == "Hello, world!"
+
+
+def test_runs_hello_world_machine(example):
+    sm = Machine.parse(example("hello_world"))
+
+    runner = Runner(resources=ResourceManager(providers={
+        "arn:aws:lambda:us-east-1:123456789012:function:HelloWorld": lambda x: "Hello, world!"
+    }))
+
+    assert runner.run(sm) == (sm.start_at_state, "Hello, world!")
 
 
 def test_input_passed_to_next_task():
@@ -109,3 +100,30 @@ def test_input_passed_to_next_task():
         "first_output": 2222,
         "second_output": 6666,
     }
+
+
+@pytest.mark.parametrize("input,expected_output", [
+    [{}, {}],
+    [{"x": 1}, {"x": 1}],
+])
+def test_executes_wait_state(input, expected_output):
+    wait = State.parse({
+        "Type": "Wait",
+        "Seconds": 10,
+        "Next": "NextState",
+    })
+    next_state, output = wait.execute(input=input)
+    assert next_state == "NextState"
+    assert expected_output == output
+
+
+def test_executes_fail_state():
+    fail = State.parse({
+        "Type": "Fail",
+        "Error": "ErrorA",
+        "Cause": "Kaiju attack",
+    })
+    # TODO No idea what should be the next state or output of fail state.
+    # TODO Should it just raise an exception?
+    next_state, output = fail.execute(input=input)
+    assert next_state is None

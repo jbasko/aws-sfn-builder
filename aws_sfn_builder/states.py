@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import dataclasses
 from bidict import bidict
+from jsonpath_ng import parse as parse_jsonpath
 
 from .base import Node
 from .choice_rules import ChoiceRule
@@ -73,6 +74,7 @@ class State(Node):
             "resource": "Resource",
             "input_path": "InputPath",
             "output_path": "OutputPath",
+            "result_path": "ResultPath",
         },
     )
 
@@ -120,8 +122,63 @@ class State(Node):
 
         return c
 
-    def execute(self, input, resource_resolver: Callable) -> Tuple[Optional[str], Any]:
-        raise NotImplementedError()
+    def format_state_input(self, input):
+        """
+        Applies InputPath
+        """
+        if self.input_path:
+            return parse_jsonpath(self.input_path).find(input)[0].value
+        return input
+
+    def format_result(self, input, resource_result):
+        """
+        Applies ResultPath
+        """
+        if self.result_path:
+            result_path = parse_jsonpath(self.result_path)
+            if not result_path.find(input):
+                # A quick hack to set a non-existent key (assuming the parent of the path is a dictionary).
+                result_path.left.find(input)[0].value[str(result_path.right)] = resource_result
+                return input
+            elif str(result_path) == "$":
+                return resource_result
+            else:
+                result_path.update(input, resource_result)
+                return input
+        return resource_result
+
+    def format_state_output(self, result):
+        """
+        Applies OutputPath
+        """
+        if not self.output_path:
+            return result
+
+        output_path = parse_jsonpath(self.output_path)
+        if str(output_path) == "$":
+            # From docs:
+            # If the OutputPath has the default value of $, this matches the entire input completely.
+            # In this case, the entire input is passed to the next state.
+            return result
+        else:
+            output_matches = output_path.find(result)
+            if output_matches:
+                # From docs:
+                # If the OutputPath matches an item in the state's input, only that input item is selected.
+                # This input item becomes the state's output.
+                assert len(output_matches) == 1
+                return output_matches[0].value
+            else:
+                # From docs:
+                # If the OutputPath doesn't match an item in the state's input,
+                # an exception specifies an invalid path.
+                raise NotImplementedError()
+
+    def execute(self, input, resource_resolver: Callable=None) -> Tuple[Optional[str], Any]:
+        resource_input = self.format_state_input(input)
+        resource_result = resource_resolver(self.resource)(resource_input)
+        result = self.format_result(input, resource_result)
+        return self.next, self.format_state_output(result)
 
     def dry_run(self, trace: List):
         trace.append(self.name)
@@ -134,7 +191,6 @@ class Pass(State):
         **State._FIELDS,
         **{
             "result": "Result",
-            "result_path": "ResultPath",
         },
     )
 
@@ -215,6 +271,12 @@ class Wait(State):
         if self.next is None:
             c["End"] = True
 
+    def execute(self, input, resource_resolver: Callable=None):
+        # TODO We don't actually do any waiting here, but perhaps we could delegate it to some predefined resource.
+        state_input = self.format_state_input(input)
+        state_output = self.format_state_output(state_input)
+        return self.next, state_output
+
 
 @dataclasses.dataclass
 class Fail(State):
@@ -229,6 +291,10 @@ class Fail(State):
     type: str = States.Fail
     cause: str = None
     error: str = None
+
+    def execute(self, input, resource_resolver: Callable=None):
+        # TODO No idea what should we do here.
+        return None, None
 
 
 @dataclasses.dataclass
@@ -317,7 +383,7 @@ class Sequence(State):
 
     @classmethod
     def parse_dict(cls, d: Dict, fields: Dict) -> None:
-        fields["states"] = {k: State.parse(v) for k, v in d["States"].items()}
+        fields["states"] = {k: State.parse(v, name=k) for k, v in d["States"].items()}
 
     def dry_run(self, trace):
         state = self.states[self.start_at]

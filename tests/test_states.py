@@ -216,6 +216,9 @@ def test_machine_state(example):
     assert machine.type == States.Machine
     assert isinstance(machine.start_at_state, Task)
 
+    assert machine.start_at == "Hello World"
+    assert machine.start_at_state.name == "Hello World"
+
     assert machine.compile() == source
 
 
